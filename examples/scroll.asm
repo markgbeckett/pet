@@ -27,6 +27,13 @@ START:	lda #$00		; Initialise ROM pointer (start of
 	lda #$C0
 	sta PROM+1
 
+	;; Seed random-number generator
+	lda #1
+	sta SEED
+	lda #0
+	sta SEED+1
+
+
 	;; Infinite loop to scroll screen and generate new final row
 MAIN:	jsr SCROLL
 	jmp MAIN
@@ -76,41 +83,23 @@ SKIP:	txa			; Put in A
 
 	rts			; Done
 
-	;; 16-bit pseudo-random-number generator, reproduced from
-	;; https://codebase64.org/doku.php?id=base:small_fast_16-bit_prng
-	magic=$002d
+	;; Pseudo-random-number generator. You can get 8-bit
+	;; random numbers in A or 16-bit numbers from the zero
+	;; page addresses. Leaves X/Y unchanged.
+	;;
+	;; See https://codebase64.org/doku.php?id=base:16bit_xorshift_random_generator
 	
-RAND16:
-	lda SEED
-	beq lowZero ; $0000 and $8000 are special values to test for
- 
-	;; Do a normal shift
-	asl SEED
-	lda SEED+1
-	rol
-	bcc noEor
- 
-doEor:		
-	;; high byte is in .A
-	eor #>magic
-	sta SEED+1
-	lda SEED
-	eor #<magic
-	sta SEED
-	rts
- 
-lowZero:
-	lda SEED+1
-	beq doEor 	; High byte is also zero, so apply the EOR
-			; For speed, you could store 'magic' into
-			; 'SEED' directly instead of running the EORs
- 
-	;; wasn't zero, check for $8000
-	asl
-	beq noEor ; if $00 is left after the shift, then it was $80
-	bcs doEor ; else, do the EOR based on the carry bit as usual
- 
-noEor:
-	sta SEED+1
-	lda SEED
-	rts	
+RAND16:	lda SEED+1
+        lsr
+        lda SEED
+        ror
+        eor SEED+1
+        sta SEED+1	; high part of x ^= x << 7 done
+        ror             ; A has now x >> 9 and high bit comes from low byte
+        eor SEED
+        sta SEED  	; x ^= x >> 9 and the low part of x ^= x << 7 done
+        eor SEED+1 
+        sta SEED+1 	; x ^= x << 8 done
+	
+        rts
+

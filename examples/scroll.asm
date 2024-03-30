@@ -20,7 +20,8 @@ end_of_stub
 				; randomised pattern)
 	PDEST=$52		; Store for current destination in
 				; screen
-
+	SEED=$54
+	
 START:	lda #$00		; Initialise ROM pointer (start of 
 	sta PROM		; BASIC ROM)
 	lda #$C0
@@ -57,9 +58,10 @@ LOOP:	ldy #40			; 40 characters per row, so indexes
 LOOP2:
 	;; Compute character to display ($4D/ $4E)
 	ldx #$4D
-	lda (PROM),y		; Retrieve value from ROM to create
-	dec PROM		; random 1 or 0
-
+	;; lda (PROM),y		; Retrieve value from ROM to create
+	;; dec PROM		; random 1 or 0
+	jsr RAND16
+	
 	lsr			; Check bit 0
 
 	bcc SKIP		; Character is $4D
@@ -73,3 +75,42 @@ SKIP:	txa			; Put in A
 	bne LOOP2		; Repeat if not done
 
 	rts			; Done
+
+	;; 16-bit pseudo-random-number generator, reproduced from
+	;; https://codebase64.org/doku.php?id=base:small_fast_16-bit_prng
+	magic=$002d
+	
+RAND16:
+	lda SEED
+	beq lowZero ; $0000 and $8000 are special values to test for
+ 
+	;; Do a normal shift
+	asl SEED
+	lda SEED+1
+	rol
+	bcc noEor
+ 
+doEor:		
+	;; high byte is in .A
+	eor #>magic
+	sta SEED+1
+	lda SEED
+	eor #<magic
+	sta SEED
+	rts
+ 
+lowZero:
+	lda SEED+1
+	beq doEor 	; High byte is also zero, so apply the EOR
+			; For speed, you could store 'magic' into
+			; 'SEED' directly instead of running the EORs
+ 
+	;; wasn't zero, check for $8000
+	asl
+	beq noEor ; if $00 is left after the shift, then it was $80
+	bcs doEor ; else, do the EOR based on the carry bit as usual
+ 
+noEor:
+	sta SEED+1
+	lda SEED
+	rts	

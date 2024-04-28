@@ -13,6 +13,7 @@ end_of_stub
 	DISPLAY=$8000		; Start of screen memory
 	CLR_HOME=$93		; Clear-home character
 	
+	GETIN=$FFE4		; Read keyboard
 	CHROUT=$FFD2		; New ROM Clear Screen routine
 	
 	SEED=$50		; Seed for random-number generator
@@ -49,11 +50,28 @@ HAMPSON:
 	;; Set flip counter
 	lda #00
 	sta COUNT
-	lda #04
+	lda #00
 	sta COUNT+1
 
 	;; Print game board
 	jsr SETUP_BD
+	
+	;; Query for game level
+	jsr GET_LEVEL
+	
+	;; Randomly create starting board
+	jsr RAND_BOARD
+
+	;; Game loop
+GLOOP:	jsr GET_COORD
+
+	;; Flip tiles
+	jsr FLIP9
+
+	;; Check if done
+	lda STAR_CNT
+	ora STAR_CNT+1
+	bne GLOOP
 	
 	;; Done
 	rts
@@ -62,33 +80,33 @@ HAMPSON:
 	;; top-left corner of 3x3 cell)
 	;;
 	;; On entry:
-	;;   LOCN    - game-board row coordinate
-	;;   LOCN+1  - game-board column coordinate
+	;;   ROW    - game-board row coordinate
+	;;   COL    - game-board column coordinate
 	;;
 	;; On exit:
 	;;   LOCN    - address computed (word)
 	;;   A, X, Y - corrupted
 BC2A:	; Convert screen coordinate to game board coordinate
 	clc
-	lda LOCN
+	lda ROW
 	adc #03
-	sta LOCN
-	lda LOCN+1
+	sta ROW
+	lda COL
 	adc #06
-	sta LOCN+1
+	sta COL
 	
 	;; Convert screen coordinates to a display address
 	;;
 	;; On entry:
-	;;   LOCN    - row number (0...24)
-	;;   LOCN+1  - column number (0...39)
+	;;   ROW    - row number (0...24)
+	;;   COL    - column number (0...39)
 	;;
 	;; On exit:
 	;;   LOCN    - address computed (word)
 	;;   A, X, Y - corrupted
 C2A:
-	ldy LOCN		; Retrieve row offset
-	ldx LOCN+1		; Retrieve col offset
+	ldy ROW			; Retrieve row offset
+	ldx COL			; Retrieve col offset
 
 	lda ROWSTART_HI,y	; Retrieve high byte of row start
 	sta LOCN+1 		; Store
@@ -121,8 +139,8 @@ ROWSTART_HI:
 	;; Flip 3x3 block of tiles
 	;;
 	;; On entry:
-	;;   LOCN    - game-board row coordinate
-	;;   LOCN+1  - game-board column coordinate
+	;;   ROW     - game-board row coordinate
+	;;   COL     - game-board column coordinate
 	;;   STAR_CNT - number of visible stars
 	;; 
 	;; On exit:
@@ -290,9 +308,9 @@ SETUP_BD:
 
 	;; Print top border
 	lda #02
-	sta LOCN
+	sta ROW
 	lda #05
-	sta LOCN+1
+	sta COL
 	
 	lda #<ROW_STR_1
 	sta STRING_PTR
@@ -303,9 +321,9 @@ SETUP_BD:
 	
 	;; Print bottom border
 	lda #21
-	sta LOCN
+	sta ROW
 	lda #05
-	sta LOCN+1
+	sta COL
 	
 	lda #<ROW_STR_1
 	sta STRING_PTR
@@ -336,9 +354,9 @@ SB_LOOP:
 	sec
 	lda #20
 	sbc TMP1+1
-	sta LOCN
+	sta ROW
 	lda #05
-	sta LOCN+1
+	sta COL
 
 	lda TMP1
 	jsr PRINT_NUM
@@ -347,9 +365,9 @@ SB_LOOP:
 	sec
 	lda #20
 	sbc TMP1+1
-	sta LOCN
+	sta ROW
 	lda #35
-	sta LOCN+1
+	sta COL
 
 	lda TMP1
 	jsr PRINT_NUM
@@ -365,9 +383,6 @@ SB_LOOP:
 	dec TMP1+1
 	bne SB_LOOP
 	
-	;; Randomly create starting board
-	jsr RAND_BOARD
-
 	rts
 
 ROW_STR_1:
@@ -381,6 +396,12 @@ ROW_STR_1:
 ROW_STR_2:
 	!byte $A0, $A0, $FF
 	
+CHECK_NO_KEY:
+	jsr GETIN
+	bne CHECK_NO_KEY
+
+	rts
+
 	;; Initialise game by completing a number of flip operatons
 	;; of random cells, based on counter stored in COUNT (word)
 	;;
@@ -394,13 +415,13 @@ RAND_BOARD:
 
 	lda SEED
 	and #$0F
-	sta LOCN
+	sta ROW
 
 	lda SEED+1
 	sta TMP1
 	jsr DIV10
 	lda TMP1
-	sta LOCN+1
+	sta COL
 
 	jsr FLIP9
 
@@ -417,3 +438,160 @@ SB_DEC:	dec COUNT
 	bne RAND_BOARD
 
 	rts
+
+GET_LEVEL:
+	;; Print message
+	lda #23
+	sta ROW
+	lda #06
+	sta COL
+	
+	lda #<GL_STR
+	sta STRING_PTR
+	lda #>GL_STR
+	sta STRING_PTR+1
+
+	jsr PRINT_STR
+
+	;; Retrieve keypress
+GL_READ:
+	jsr GETIN
+	beq GL_READ
+
+	;; On exit A contains 30, ..., 39
+GL_PROCESS:
+	cmp #$30		; Check range
+	bcc GL_READ
+	cmp #$40
+	bcs GL_READ
+
+	;; Convert to level
+	sec
+	sbc #$2F
+	sta COUNT
+
+	;; Print level
+	tax
+	lda #23
+	sta ROW
+	lda #31
+	sta COL
+
+	txa
+	sec
+	sbc #01
+
+	jsr PRINT_NUM
+	
+	;; Done
+	rts
+
+	;; Prompt user for coordinate of tile to flip
+	;; Store coordinate in ROW, COL
+GET_COORD:
+	;; Print request to enter coordinate at (23,06)
+	lda #23
+	sta ROW
+	lda #06
+	sta COL
+	
+	lda #<GL_STR_2
+	sta STRING_PTR
+	lda #>GL_STR_2
+	sta STRING_PTR+1
+
+	jsr PRINT_STR
+
+	;; Retrieve column value (A,..., Z)
+GC_READ:
+	jsr GETIN
+	beq GC_READ		; Repeat, if no key pressed
+
+	;; On exit A should contain 65 ('A'), ..., 90 ('Z')
+	cmp #$41		; Check range
+	bcc GC_READ
+	cmp #$5B
+	bcs GC_READ
+	
+	;;  Normalise to 1...26 for printing
+	sec
+	sbc #$40
+	sta $83B5		; Print it
+	
+	;;  Normalise to 0...25 for game
+	sec
+	sbc #01
+	
+	sta COL
+	
+	;; Set row value to zero
+	lda #00
+	sta ROW
+
+	jsr CHECK_NO_KEY
+	
+	;; Retrieve high row value
+GC_READ_2:
+	jsr GETIN
+	beq GC_READ_2		; Repeat, if no key pressed
+
+	;; On exit A should contain 30 or 31
+	cmp #$30		; Check for '0'
+	beq GC_PR_0		; Move on if so,
+	cmp #$31		; Check for '1'
+	bne GC_READ_2		; Repeat if not
+
+	sta $83B6		; Print it
+	
+	;; '1' pressed, so set row base to 10
+	lda #$0A
+	sta ROW
+
+	jmp GC_ROW_LOW		; Skip next instruction (could be BNE)
+	
+GC_PR_0:
+	sta $83B6		; Print digit
+	
+GC_ROW_LOW:	
+	jsr CHECK_NO_KEY
+	
+	;; Retrieve low row value
+GC_READ_3:
+	jsr GETIN
+	beq GC_READ_3		; Repeat, if no key pressed
+
+	;; On exit A contains 30, ..., 39
+	cmp #$30		; Check range
+	bcc GC_READ_3
+	cmp #$40
+	bcs GC_READ_3
+
+	sta $83B7		; Print it
+	
+	;; Translate into digit (normalise on zero)
+	sec
+	sbc #$31
+
+	;; And update row value
+	clc
+	adc ROW
+	sta ROW
+
+	rts			; Done
+	
+	
+GL_STR:	!byte 03, 08, 15, 15, 19, 05, 32
+	!byte 19, 11, 09, 12, 12, 32
+	!byte 12, 05, 22, 05, 12, 32
+	!pet "(0-9)"
+	!byte $FF
+
+	;; ENTER MOVE (COL FIRST)
+GL_STR_2:
+	!byte 05, 14, 20, 05, 18, 32
+	!byte 13, 15, 22, 05, 32
+	!pet "("
+	!byte 03, 15, 12, 32
+	!byte 06, 09, 18, 19, 20
+	!pet ")"
+	!byte 32, 32, 32, 32, 32, 32, 32, $FF	

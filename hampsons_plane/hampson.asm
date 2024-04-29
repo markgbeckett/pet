@@ -13,6 +13,7 @@ end_of_stub
 	DISPLAY=$8000		; Start of screen memory
 	CLR_HOME=$93		; Clear-home character
 	
+	VIA_PCR=$E84C
 	GETIN=$FFE4		; Read keyboard
 	CHROUT=$FFD2		; New ROM Clear Screen routine
 	
@@ -34,23 +35,13 @@ end_of_stub
 	STRING_PTR=$5D
 	
 HAMPSON:
-	;; Seed random-number generator
-	lda $008F		; Retrieve low byte of 
-				; seed from jiffy clock
-	sta SEED
-	lda #01			; Set high byte to non-zero
-				; to avoid risk of zero starting seed
-	sta SEED+1
-
-	;; Zero star counter
+	;; Initial setup
+	lda #$0E		; Set charset to Business
+	sta VIA_PCR
 	lda #00
-	sta STAR_CNT
+	sta STAR_CNT		; Zero star counter
 	sta STAR_CNT+1
-	
-	;; Set flip counter
-	lda #00
-	sta COUNT
-	lda #00
+	sta COUNT 		; Set flip counter
 	sta COUNT+1
 
 	;; Print game board
@@ -59,6 +50,9 @@ HAMPSON:
 	;; Query for game level
 	jsr GET_LEVEL
 	
+	;; Randomly seed RNG
+	jsr RAND0
+
 	;; Randomly create starting board
 	jsr RAND_BOARD
 
@@ -86,7 +80,7 @@ GLOOP:	jsr GET_COORD
 	;; On exit:
 	;;   LOCN    - address computed (word)
 	;;   A, X, Y - corrupted
-BC2A:	; Convert screen coordinate to game board coordinate
+BC2A:	; Shift coordinate by (3,6) and then use C2A
 	clc
 	lda ROW
 	adc #03
@@ -147,7 +141,7 @@ ROWSTART_HI:
 	;;   STAR_CNT - updated number of visible stars
 	;;   LOCN(2) - corrupted
 	;;   A, X, Y - corrupted
-FLIP9:	jsr BC2A		; Convert coord at LOCN to address
+FLIP9:	jsr BC2A		; Convert board coord to screen address
 
 	ldx #03			; Three rows to flip
 FL_ROW:	ldy #03			; Three columns to flip
@@ -156,7 +150,8 @@ FL_CHR:	lda (LOCN),y		; Retrieve current character
 	eor #$0A		; Flip it (char 42 = */ 32 = SPACE)
 	sta (LOCN),y		; Store it
 	
-	;; Update star count
+	;; Update star count (we alway subtract one, but add two first
+	;; if character is a star)
 FL_CONT:
 	cmp #42			; Check if star
 	bne FL_CONT_2		; Skip forward if not
@@ -191,41 +186,6 @@ FL_NC:	dex
 	bne FL_ROW
 
 	;; Done
-	rts
-
-	;; Pseudo-random-number generator. You can get 8-bit
-	;; random numbers in A or 16-bit numbers from the zero
-	;; page addresses. Leaves X/Y unchanged.
-	;;
-	;; See https://codebase64.org/doku.php?id=base:16bit_xorshift_random_generator
-	
-RAND16:	lda SEED+1
-        lsr
-        lda SEED
-        ror
-        eor SEED+1
-        sta SEED+1	; high part of x ^= x << 7 done
-        ror             ; A has now x >> 9 and high bit comes from low byte
-        eor SEED
-        sta SEED  	; x ^= x >> 9 and the low part of x ^= x << 7 done
-        eor SEED+1 
-        sta SEED+1 	; x ^= x << 8 done
-	
-        rts
-
-	;; Divide by 10
-	;; See http://6502org.wikidot.com/software-math-intdiv for details
-DIV10:	lda #0
-	ldx #8
-	asl TMP1
-D1:	rol
-	cmp #$0A
-	bcc D2
-	sbc #$0A
-D2:	rol TMP1
-	dex
-	bne D1
-
 	rts
 
 	;; Print string to screen
@@ -395,7 +355,14 @@ ROW_STR_1:
 
 ROW_STR_2:
 	!byte $A0, $A0, $FF
-	
+
+	;; Wait for user to stop pressing any keys. Useful to ensure
+	;; do not read one keystroke as two separate key presses
+	;;
+	;; On entry:
+	;;
+	;; On exit:
+	;;   A, X, Y - corrupted
 CHECK_NO_KEY:
 	jsr GETIN
 	bne CHECK_NO_KEY
@@ -419,7 +386,9 @@ RAND_BOARD:
 
 	lda SEED+1
 	sta TMP1
-	jsr DIV10
+	lda #10
+	sta TMP1+1
+	jsr DIVIDE
 	lda TMP1
 	sta COL
 
@@ -468,7 +437,7 @@ GL_PROCESS:
 	;; Convert to level
 	sec
 	sbc #$2F
-	sta COUNT
+	sta COUNT+1
 
 	;; Print level
 	tax
@@ -486,8 +455,16 @@ GL_PROCESS:
 	;; Done
 	rts
 
-	;; Prompt user for coordinate of tile to flip
-	;; Store coordinate in ROW, COL
+	;; CHOOSE SKILL LEVEL (0-9)
+GL_STR:	!scr "CHOOSE SKILL LEVEL (0-9)"
+	!byte $FF
+
+	;; Prompt user for coordinate of tile to flip.
+	;;
+	;; On entry:
+	;;
+	;; On exit:
+	;;   ROW, COL - coordinates entered by user
 GET_COORD:
 	;; Print request to enter coordinate at (23,06)
 	lda #23
@@ -495,9 +472,9 @@ GET_COORD:
 	lda #06
 	sta COL
 	
-	lda #<GL_STR_2
+	lda #<GC_STR
 	sta STRING_PTR
-	lda #>GL_STR_2
+	lda #>GC_STR
 	sta STRING_PTR+1
 
 	jsr PRINT_STR
@@ -579,19 +556,107 @@ GC_READ_3:
 
 	rts			; Done
 	
-	
-GL_STR:	!byte 03, 08, 15, 15, 19, 05, 32
-	!byte 19, 11, 09, 12, 12, 32
-	!byte 12, 05, 22, 05, 12, 32
-	!pet "(0-9)"
-	!byte $FF
-
 	;; ENTER MOVE (COL FIRST)
-GL_STR_2:
-	!byte 05, 14, 20, 05, 18, 32
-	!byte 13, 15, 22, 05, 32
-	!pet "("
-	!byte 03, 15, 12, 32
-	!byte 06, 09, 18, 19, 20
-	!pet ")"
-	!byte 32, 32, 32, 32, 32, 32, 32, $FF	
+GC_STR: !scr "ENTER MOVE (COL FIRST)       "
+	!byte $FF	
+	
+	
+	;; Seed random-number generator using low byte of jiffy clock
+	;; to provide some level of randomness, if using PRG file with
+	;; auto-start
+	;; 
+	;; On entry:
+	;;
+	;; On exit:
+	;;   SEED - set pseudo-randomly
+	;;   A - corrupted
+RAND0:
+	lda $008F		; Retrieve low byte of 
+	sta SEED		; seed from jiffy clock
+	
+	lda #01			; Set high byte to non-zero
+	sta SEED+1		; to avoid risk of zero starting seed
+
+	rts			; Done
+	
+	
+	;; Pseudo-random-number generator, able to produce both 8-bit
+	;; and 16-bit random numbers.
+	;;
+	;; See https://codebase64.org/doku.php?id=base:16bit_xorshift_random_generator
+	;; for details of random-number generator
+	;; 
+	;; On entry:
+	;;   SEED - set to RNG
+	;;
+	;; On exit:
+	;;   A    - new random number (8-bit)
+	;;   SEED - new random number (16-bit)
+	;;
+RAND16:	lda SEED+1
+        lsr
+        lda SEED
+        ror
+        eor SEED+1
+        sta SEED+1	; high part of x ^= x << 7 done
+        ror             ; A has now x >> 9 and high bit comes from low byte
+        eor SEED
+        sta SEED  	; x ^= x >> 9 and the low part of x ^= x << 7 done
+        eor SEED+1 
+        sta SEED+1 	; x ^= x << 8 done
+	
+        rts
+
+	;; 8-bit/8-bit integer division
+	;; See http://6502org.wikidot.com/software-math-intdiv
+	;; for details
+	;;
+	;; On entry:
+	;;   TMP1 - numerator
+	;;   TMP2 - denominator
+	;;
+	;; On exit:
+	;;   TMP1 - quotient
+	;;   A    - remainder
+	;;  
+DIVIDE:	lda #0
+	ldx #8
+	asl TMP1
+D1:	rol
+	cmp TMP1+1
+	bcc D2
+	sbc TMP1+1
+D2:	rol TMP1
+	dex
+	bne D1
+
+	rts
+
+	;; 16-bit/8-bit integer division
+	;; See http://6502org.wikidot.com/software-math-intdiv#toc1
+	;; for details
+	;; 
+	;; On entry:
+	;;   TMP1 - numerator (low)
+	;;   TMP1+1 - numerator (high)
+	;;   TMP1+2 - denominator
+	;;
+	;; On exit:
+	;;   TMP1 - quotient
+	;;   A    - remainder
+	lda TMP1+1
+	ldx #8
+	asl TMP1
+	
+L1:	rol
+	bcs L2
+	cmp TMP1+2
+	bcc L3
+L2:	sbc TMP1+2
+
+	sec ; SEC needed when the bcs L2 branch above is taken
+L3:	rol TMP1
+	dex
+	bne L1
+
+	rts

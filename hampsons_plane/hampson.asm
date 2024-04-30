@@ -66,6 +66,12 @@ GLOOP:	jsr GET_COORD
 	lda STAR_CNT
 	ora STAR_CNT+1
 	bne GLOOP
+
+	;; New game
+	jsr SOLVED
+	
+	jsr NEW_GAME
+	beq HAMPSON
 	
 	;; Done
 	rts
@@ -429,16 +435,34 @@ GL_READ:
 
 	;; On exit A contains 30, ..., 39
 GL_PROCESS:
-	cmp #$30		; Check range
+	cmp #"0"		; Check range
 	bcc GL_READ
-	cmp #$40
+	cmp #"9"+1
 	bcs GL_READ
 
 	;; Convert to level
 	sec
-	sbc #$2F
-	sta COUNT+1
+	sbc #"0"-1
 
+	pha			; Save A to stack for later
+
+	tax			; X will be counter
+
+	;; Flip count is 64x(LEVEL+1)
+GL_STAR:
+	lda #$40
+	clc
+	adc COUNT
+	sta COUNT
+	bcc GL_CONT
+	inc COUNT+1
+
+GL_CONT:
+	dex
+	bne GL_STAR
+	
+	pla			; Retrieve A from stack
+	
 	;; Print level
 	tax
 	lda #23
@@ -485,9 +509,9 @@ GC_READ:
 	beq GC_READ		; Repeat, if no key pressed
 
 	;; On exit A should contain 65 ('A'), ..., 90 ('Z')
-	cmp #$41		; Check range
+	cmp #"A"		; Check range
 	bcc GC_READ
-	cmp #$5B
+	cmp #"Z"+1
 	bcs GC_READ
 	
 	;;  Normalise to 1...26 for printing
@@ -559,7 +583,39 @@ GC_READ_3:
 	;; ENTER MOVE (COL FIRST)
 GC_STR: !scr "ENTER MOVE (COL FIRST)       "
 	!byte $FF	
+
+SOLVED:
+	;; Print request to enter coordinate at (23,06)
+	lda #23
+	sta ROW
+	lda #06
+	sta COL
 	
+	lda #<SO_STR
+	sta STRING_PTR
+	lda #>SO_STR
+	sta STRING_PTR+1
+
+	jsr PRINT_STR
+
+	;; Wait for new key press
+	jsr CHECK_NO_KEY	; Wait for no keys
+	
+SO_KEY:	jsr GETIN
+	beq SO_KEY		; Repeat, if no key pressed
+	
+	rts
+	
+SO_STR:	!scr "GRID SOLVED               "
+	!byte $FF
+	
+
+	;; Check if user wants another game
+NEW_GAME:
+	lda #01			; Reset Z flag
+	
+	rts
+
 	
 	;; Seed random-number generator using low byte of jiffy clock
 	;; to provide some level of randomness, if using PRG file with

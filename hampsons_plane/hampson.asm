@@ -31,8 +31,10 @@ end_of_stub
 	COUNT=$58
 
 	;; Temp values
-	TMP1=$5B
-	STRING_PTR=$5D
+	TMP=$5B			; 6 bytes
+	STRING_PTR=$61
+
+	TIME=$8D
 	
 HAMPSON:
 	;; Initial setup
@@ -49,7 +51,7 @@ HAMPSON:
 	
 	;; Query for game level
 	jsr GET_LEVEL
-	
+
 	;; Randomly seed RNG
 	jsr RAND0
 
@@ -75,6 +77,22 @@ GLOOP:	jsr GET_COORD
 	
 	;; Done
 	rts
+
+	;; Get time
+CLOCK:	lda TIME+2		; Read clock
+	sta TMP+2
+	lda TIME+1
+	sta TMP+3
+
+	lda #60			; 60th seconds
+	sta TMP
+	lda #00
+	sta TMP+1
+
+	jsr DIV16
+
+	rts
+	
 
 	;; Convert game-board coordinates to a display address (for
 	;; top-left corner of 3x3 cell)
@@ -311,42 +329,42 @@ SETUP_BD:
 		
 	;; Print game-board sides
 	lda #01
-	sta TMP1
+	sta TMP
 	lda #16
-	sta TMP1+1
+	sta TMP+1
 	
 SB_LOOP:
 	;; Start with left column
 	sec
 	lda #20
-	sbc TMP1+1
+	sbc TMP+1
 	sta ROW
 	lda #05
 	sta COL
 
-	lda TMP1
+	lda TMP
 	jsr PRINT_NUM
 
 	;; Then right column
 	sec
 	lda #20
-	sbc TMP1+1
+	sbc TMP+1
 	sta ROW
 	lda #35
 	sta COL
 
-	lda TMP1
+	lda TMP
 	jsr PRINT_NUM
 
 	;; increment coordinate label (binary coded decimal)
 	sed
-	lda TMP1
+	lda TMP
 	clc
 	adc #01
-	sta TMP1
+	sta TMP
 	cld
 	
-	dec TMP1+1
+	dec TMP+1
 	bne SB_LOOP
 	
 	rts
@@ -391,11 +409,11 @@ RAND_BOARD:
 	sta ROW
 
 	lda SEED+1
-	sta TMP1
+	sta TMP
 	lda #10
-	sta TMP1+1
+	sta TMP+1
 	jsr DIVIDE
-	lda TMP1
+	lda TMP
 	sta COL
 
 	jsr FLIP9
@@ -668,51 +686,58 @@ RAND16:	lda SEED+1
 	;; for details
 	;;
 	;; On entry:
-	;;   TMP1 - numerator
-	;;   TMP2 - denominator
+	;;   TMP   - numerator
+	;;   TMP+1 - denominator
 	;;
 	;; On exit:
-	;;   TMP1 - quotient
+	;;   TMP - quotient
 	;;   A    - remainder
 	;;  
 DIVIDE:	lda #0
 	ldx #8
-	asl TMP1
+	asl TMP
 D1:	rol
-	cmp TMP1+1
+	cmp TMP+1
 	bcc D2
-	sbc TMP1+1
-D2:	rol TMP1
+	sbc TMP+1
+D2:	rol TMP
 	dex
 	bne D1
 
 	rts
 
-	;; 16-bit/8-bit integer division
-	;; See http://6502org.wikidot.com/software-math-intdiv#toc1
-	;; for details
-	;; 
-	;; On entry:
-	;;   TMP1 - numerator (low)
-	;;   TMP1+1 - numerator (high)
-	;;   TMP1+2 - denominator
+	;; 16-bit division
 	;;
-	;; On exit:
-	;;   TMP1 - quotient
-	;;   A    - remainder
-	lda TMP1+1
-	ldx #8
-	asl TMP1
-	
-L1:	rol
-	bcs L2
-	cmp TMP1+2
-	bcc L3
-L2:	sbc TMP1+2
+	;; On entry
+	;;   TMP - divisor (little Endian)
+	;;   TMP+2 - dividend (little Endian)
+	;;
+	;; On exit
+	;;   TMP+2 - quotient (little Endian)
+	;;   TMP+4 - remainder (little Endian)
+	;;   A, X, Y - corrupted
+	;; 
+DIV16:	lda #0	        ;preset remainder to 0
+	sta TMP+4
+	sta TMP+5
+	ldx #16	        ;repeat for each bit: ...
 
-	sec ; SEC needed when the bcs L2 branch above is taken
-L3:	rol TMP1
-	dex
-	bne L1
+DIV_LP:	asl TMP+2	;dividend lb & hb*2, msb -> Carry
+	rol TMP+3	
+	rol TMP+4	;remainder lb & hb * 2 + msb from carry
+	rol TMP+5
+	lda TMP+4
+	sec
+	sbc TMP	;substract divisor to see if it fits in
+	tay	        ;lb result -> Y, for we may need it later
+	lda TMP+5
+	sbc TMP+1
+	bcc DIV_SK	;if carry=0 then divisor didn't fit in yet
 
+	sta TMP+5	;else save substraction result as new remainder,
+	sty TMP+4	
+	inc TMP+2	;and INCrement result cause divisor fit in 1 times
+
+DIV_SK:	dex
+	bne DIV_LP	
 	rts

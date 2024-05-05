@@ -1,3 +1,10 @@
+	;; Hampson's Plane is a tile-flipping game, created by Mark
+	;; Hampson as a BASIC type-in for the ZX80 in 1981 (SYNC
+	;; Magazine Vol 1, N. 6 (Nov/ Dec '81, p. 38).
+	;;
+	;; This is a port to the Commodore PET, written in 6502 machine
+	;; code, and including a timer as an added game element.
+	
 !to "hampson.prg",cbm
 	;; BASIC loader
 	;; 6502 SYS (1037)
@@ -12,47 +19,52 @@ end_of_stub
 
 	DISPLAY=$8000		; Start of screen memory
 	CLR_HOME=$93		; Clear-home character
-	
-	VIA_PCR=$E84C
+
+	;; PET BASIC 4.0 ROM routines and variables
+	TIME=$8D	 ; Address of jiffy timer
+	VIA_PCR=$E84C		; System variable noting character set in use
 	GETIN=$FFE4		; Read keyboard
 	CHROUT=$FFD2		; New ROM Clear Screen routine
-	
-	SEED=$50		; Seed for random-number generator
-	LOCN=$52		; Zero-page store for address
-	
-	;; Fill in grid
-	ROW=$54
-	COL=$55
 
-	;; Count of number of stars on game board
-	STAR_CNT=$56
+	;; Page 0 temporary storage
+	SEED=$50		; (2) Seed for random-number generator
+	LOCN=$52		; (2) Holds screen address
+	ROW=$54			; (1) Holds current print row
+	COL=$55			; (1) Holds current print column
+	STAR_CNT=$56		; (2) Holds number of stars on screen
+	COUNT=$58		; (2) Temporary store for various counters
+	CALC_STORE=$5B		; (8) Temporary storage for calculations
+	STRING_PTR=$63		; (2) Pointer to PETSCII string to be printed
 
-	;; Temporary counter
-	COUNT=$58
-
-	;; Temp values
-	TMP=$5B			; 6 bytes
-	STRING_PTR=$61
-
-	TIME=$8D
-	
+	;; Main game routine
 HAMPSON:
 	;; Initial setup
-	lda #$0E		; Set charset to Business
+	lda #$0E		; Set active charset to Business
 	sta VIA_PCR
+	
 	lda #00
 	sta STAR_CNT		; Zero star counter
 	sta STAR_CNT+1
-	sta COUNT 		; Set flip counter
+	
+	sta COUNT 		; Zero flip counter
 	sta COUNT+1
 
 	;; Print game board
-	jsr SETUP_BD
+	jsr SETUP_BOARD
 	
 	;; Query for game level
 	jsr GET_LEVEL
 
-	;; Randomly seed RNG
+	;; Reset clock
+	sei
+	lda #00
+	sta TIME
+	sta TIME+1
+	sta TIME+2
+	cli
+
+	;; Randomly seed RNG (done now, so benefit from unpredictable
+	;; time take for GET_LEVEL)
 	jsr RAND0
 
 	;; Randomly create starting board
@@ -61,6 +73,8 @@ HAMPSON:
 	;; Game loop
 GLOOP:	jsr GET_COORD
 
+	;; Check coordinate
+	
 	;; Flip tiles
 	jsr FLIP9
 
@@ -71,25 +85,74 @@ GLOOP:	jsr GET_COORD
 
 	;; New game
 	jsr SOLVED
-	
+
+	;; Check if player wants to play another game
 	jsr NEW_GAME
 	beq HAMPSON
 	
-	;; Done
+	;; If not, we're done
 	rts
 
-	;; Get time
-CLOCK:	lda TIME+2		; Read clock
-	sta TMP+2
-	lda TIME+1
-	sta TMP+3
+	;; Print time to screen in tenths of second, based on Jiffy
+	;; clock.
+	;;
+	;; This version only works for times up to ~18 minutes
+	;;
+	;; On entry:
+	;;
+	;; On exit:
+	;;   A - corrupted
+CLOCK:	;Retrieve current time (pause interrupts to avoid misread)
+	sei			; Pause interrupts
+	lda TIME+2		; Read lowest byte of Jiffy clock
+	sta CALC_STORE+2
+	lda TIME+1		; Read second byte of Jiffy clock
+	sta CALC_STORE+3
+	cli			; Resume interrupts
 
-	lda #60			; 60th seconds
-	sta TMP
+	;; Convert time from 60th seconds to 10th seconds
+	lda #6			; Set divisor to 6
+	sta CALC_STORE
 	lda #00
-	sta TMP+1
+	sta CALC_STORE+1
 
+	jsr DIV16		; Divide time by 6
+
+	;; Set print position
+	POSN=DISPLAY+22*40+36
+	lda #<POSN
+	sta LOCN
+	lda #>POSN
+	sta LOCN+1
+
+	;; Retrieve fractions of second
+	lda #10			; Divid by 10
+	sta CALC_STORE
+	lda #00
+	sta CALC_STORE+1
+
+	jsr DIV16		; Divide time by 10
+	lda CALC_STORE+4	; Retrieve remainder
+	jsr PRINT_DIGIT
+
+	;; Print decimal place
+	ldy #00
+	lda #"."
+	sta (LOCN),y
+	dec LOCN
+	
+	;; Now retrieve four digits, one by one, and print
+	lda #4 			; 4 digits
+	sta CALC_STORE+6	; Store it
+	
+CL_LOOP:
 	jsr DIV16
+
+	lda CALC_STORE+4
+	jsr PRINT_DIGIT
+
+	dec CALC_STORE+6
+	bne CL_LOOP
 
 	rts
 	
@@ -215,7 +278,7 @@ FL_NC:	dex
 	;; Print string to screen
 	;;
 	;; On entry:
-	;;   LOCN, LOCN+1 - location to print to
+	;;   ROW, COL - location to print to
 	;;   STRING_PTR - address of string (terminated with $FF)
 	;;
 	;; On exit:
@@ -239,6 +302,31 @@ PS_LOOP:
 PS_DONE:
 	rts
 
+	;; Print (decimal) digit to screen and advance print loc
+	;;
+	;; On entry:
+	;;   A - digit to be printed (0..9)
+	;;   LOCN(2) - screen address to print to
+	;;
+	;; On exit:
+	;;   A, Y - corrupted
+	;;   LOCN(2) - next location to print to
+PRINT_DIGIT:
+	;; Print digit
+	clc			; Convert A to PETSCII 
+	adc #"0"		; code
+
+	ldy #0	       		; Set index to zero
+	
+	sta (LOCN),y		; Print character
+
+	;; Advance location
+	dec LOCN
+	
+PD_DONE:
+	rts			; Done
+
+	
 	;; Print number to screen
 	;;
 	;; On entry:
@@ -286,7 +374,7 @@ PN_LOOP:
 	;; 
 	;; On exit:
 	;;   STAR_CNT - number of visible stars in puzzle
-SETUP_BD:
+SETUP_BOARD:
 	lda #CLR_HOME		; Clear screen
 	jsr CHROUT	
 
@@ -329,42 +417,42 @@ SETUP_BD:
 		
 	;; Print game-board sides
 	lda #01
-	sta TMP
+	sta CALC_STORE
 	lda #16
-	sta TMP+1
+	sta CALC_STORE+1
 	
 SB_LOOP:
 	;; Start with left column
 	sec
 	lda #20
-	sbc TMP+1
+	sbc CALC_STORE+1
 	sta ROW
 	lda #05
 	sta COL
 
-	lda TMP
+	lda CALC_STORE
 	jsr PRINT_NUM
 
 	;; Then right column
 	sec
 	lda #20
-	sbc TMP+1
+	sbc CALC_STORE+1
 	sta ROW
 	lda #35
 	sta COL
 
-	lda TMP
+	lda CALC_STORE
 	jsr PRINT_NUM
 
 	;; increment coordinate label (binary coded decimal)
 	sed
-	lda TMP
+	lda CALC_STORE
 	clc
 	adc #01
-	sta TMP
+	sta CALC_STORE
 	cld
 	
-	dec TMP+1
+	dec CALC_STORE+1
 	bne SB_LOOP
 	
 	rts
@@ -409,11 +497,11 @@ RAND_BOARD:
 	sta ROW
 
 	lda SEED+1
-	sta TMP
+	sta CALC_STORE
 	lda #10
-	sta TMP+1
+	sta CALC_STORE+1
 	jsr DIVIDE
-	lda TMP
+	lda CALC_STORE
 	sta COL
 
 	jsr FLIP9
@@ -523,6 +611,7 @@ GET_COORD:
 
 	;; Retrieve column value (A,..., Z)
 GC_READ:
+ 	jsr CLOCK
 	jsr GETIN
 	beq GC_READ		; Repeat, if no key pressed
 
@@ -551,6 +640,7 @@ GC_READ:
 	
 	;; Retrieve high row value
 GC_READ_2:
+  	jsr CLOCK
 	jsr GETIN
 	beq GC_READ_2		; Repeat, if no key pressed
 
@@ -576,6 +666,7 @@ GC_ROW_LOW:
 	
 	;; Retrieve low row value
 GC_READ_3:
+	jsr CLOCK
 	jsr GETIN
 	beq GC_READ_3		; Repeat, if no key pressed
 
@@ -686,21 +777,21 @@ RAND16:	lda SEED+1
 	;; for details
 	;;
 	;; On entry:
-	;;   TMP   - numerator
-	;;   TMP+1 - denominator
+	;;   CALC_STORE   - numerator
+	;;   CALC_STORE+1 - denominator
 	;;
 	;; On exit:
-	;;   TMP - quotient
+	;;   CALC_STORE - quotient
 	;;   A    - remainder
 	;;  
 DIVIDE:	lda #0
 	ldx #8
-	asl TMP
+	asl CALC_STORE
 D1:	rol
-	cmp TMP+1
+	cmp CALC_STORE+1
 	bcc D2
-	sbc TMP+1
-D2:	rol TMP
+	sbc CALC_STORE+1
+D2:	rol CALC_STORE
 	dex
 	bne D1
 
@@ -709,34 +800,35 @@ D2:	rol TMP
 	;; 16-bit division
 	;;
 	;; On entry
-	;;   TMP - divisor (little Endian)
-	;;   TMP+2 - dividend (little Endian)
+	;;   CALC_STORE - divisor (little Endian)
+	;;   CALC_STORE+2 - dividend (little Endian)
 	;;
 	;; On exit
-	;;   TMP+2 - quotient (little Endian)
-	;;   TMP+4 - remainder (little Endian)
+	;;   CALC_STORE - divisor is preserved
+	;;   CALC_STORE+2 - quotient (little Endian)
+	;;   CALC_STORE+4 - remainder (little Endian)
 	;;   A, X, Y - corrupted
 	;; 
 DIV16:	lda #0	        ;preset remainder to 0
-	sta TMP+4
-	sta TMP+5
+	sta CALC_STORE+4
+	sta CALC_STORE+5
 	ldx #16	        ;repeat for each bit: ...
 
-DIV_LP:	asl TMP+2	;dividend lb & hb*2, msb -> Carry
-	rol TMP+3	
-	rol TMP+4	;remainder lb & hb * 2 + msb from carry
-	rol TMP+5
-	lda TMP+4
+DIV_LP:	asl CALC_STORE+2	;dividend lb & hb*2, msb -> Carry
+	rol CALC_STORE+3	
+	rol CALC_STORE+4	;remainder lb & hb * 2 + msb from carry
+	rol CALC_STORE+5
+	lda CALC_STORE+4
 	sec
-	sbc TMP	;substract divisor to see if it fits in
+	sbc CALC_STORE	;substract divisor to see if it fits in
 	tay	        ;lb result -> Y, for we may need it later
-	lda TMP+5
-	sbc TMP+1
+	lda CALC_STORE+5
+	sbc CALC_STORE+1
 	bcc DIV_SK	;if carry=0 then divisor didn't fit in yet
 
-	sta TMP+5	;else save substraction result as new remainder,
-	sty TMP+4	
-	inc TMP+2	;and INCrement result cause divisor fit in 1 times
+	sta CALC_STORE+5	;else save substraction result as new remainder,
+	sty CALC_STORE+4	
+	inc CALC_STORE+2	;and INCrement result cause divisor fit in 1 times
 
 DIV_SK:	dex
 	bne DIV_LP	

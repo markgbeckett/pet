@@ -74,6 +74,8 @@ HAMPSON:
 GLOOP:	jsr GET_COORD
 
 	;; Check coordinate
+	jsr CHECK_MOVE
+	bcs GLOOP
 	
 	;; Flip tiles
 	jsr FLIP9
@@ -693,6 +695,28 @@ GC_READ_3:
 GC_STR: !scr "ENTER MOVE (COL FIRST)       "
 	!byte $FF	
 
+	;; Check if previously entered move is valid
+	;;
+	;; On entry:
+	;;   ROW - user-specified row coordinate
+	;;   COL - user-specified column coordinate
+	;;
+	;; On exit
+	;;   C reset - coordinate valid
+	;;   C set   - coordinate not valid
+CHECK_MOVE:	
+	;; Check row
+	lda ROW
+	cmp #16			; Invalid if greater than 15 (which
+	bcs CM_DONE		; could also be less than zero)
+
+	;; Check column
+	lda COL
+	cmp #26			; Invalid if greater than 25 (which
+	
+CM_DONE:
+	rts
+
 SOLVED:
 	;; Print request to enter coordinate at (23,06)
 	lda #23
@@ -715,17 +739,37 @@ SO_KEY:	jsr GETIN
 	
 	rts
 	
-SO_STR:	!scr "GRID SOLVED               "
+SO_STR:	!scr "GRID SOLVED. WELL DONE       "
+	!byte $FF
+	
+NEW_GAME:
+	;; Print request to enter coordinate at (23,06)
+	lda #23
+	sta ROW
+	lda #04
+	sta COL
+	
+	lda #<NG_STR
+	sta STRING_PTR
+	lda #>NG_STR
+	sta STRING_PTR+1
+
+	jsr PRINT_STR
+
+	;; Wait for new key press
+	jsr CHECK_NO_KEY	; Wait for no keys
+	
+NG_KEY:	jsr GETIN
+	beq NG_KEY		; Repeat, if no key pressed
+
+	cmp #"Y"
+	
+	rts
+	
+NG_STR:	!scr "WOULD YOU LIKE ANOTHER GAME (Y/N)"
 	!byte $FF
 	
 
-	;; Check if user wants another game
-NEW_GAME:
-	lda #01			; Reset Z flag
-	
-	rts
-
-	
 	;; Seed random-number generator using low byte of jiffy clock
 	;; to provide some level of randomness, if using PRG file with
 	;; auto-start

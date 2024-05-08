@@ -55,20 +55,15 @@ HAMPSON:
 	;; Query for game level
 	jsr GET_LEVEL
 
-	;; Reset clock
-	sei
-	lda #00
-	sta TIME
-	sta TIME+1
-	sta TIME+2
-	cli
-
 	;; Randomly seed RNG (done now, so benefit from unpredictable
 	;; time take for GET_LEVEL)
 	jsr RAND0
 
 	;; Randomly create starting board
 	jsr RAND_BOARD
+
+	;; Reset clock
+	jsr RESET_CLOCK
 
 	;; Game loop
 GLOOP:	jsr GET_COORD
@@ -768,7 +763,23 @@ NG_KEY:	jsr GETIN
 	
 NG_STR:	!scr "WOULD YOU LIKE ANOTHER GAME (Y/N)"
 	!byte $FF
-	
+
+	;; Reset system Jiffy clock to zero. Clock is used to measure
+	;; time taken to solve the puzzle
+	;;
+	;; On entry:
+	;;
+	;; On exit:
+	;;   A -corrupted
+RESET_CLOCK:
+	sei
+	lda #00
+	sta TIME
+	sta TIME+1
+	sta TIME+2
+	cli
+
+	rts
 
 	;; Seed random-number generator using low byte of jiffy clock
 	;; to provide some level of randomness, if using PRG file with

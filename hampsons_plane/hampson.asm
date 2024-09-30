@@ -1,6 +1,6 @@
-	;; Hampson's Plane is a tile-flipping game, created by Mark
+	;; Hampson's Plane is a tile-flipping game, created by Mike
 	;; Hampson as a BASIC type-in for the ZX80 in 1981 (SYNC
-	;; Magazine Vol 1, N. 6 (Nov/ Dec '81, p. 38).
+	;; Magazine Vol 1, N. 6 (Nov/ Dec '81, p. 38)).
 	;;
 	;; This is a port to the Commodore PET, written in 6502 machine
 	;; code, and including a timer as an added game element.
@@ -888,3 +888,4 @@ DIV_LP:	asl CALC_STORE+2	;dividend lb & hb*2, msb -> Carry
 DIV_SK:	dex
 	bne DIV_LP	
 	rts
+END:
